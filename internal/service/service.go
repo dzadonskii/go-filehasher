@@ -68,6 +68,10 @@ func (s *Service) Run(ctx context.Context) error {
 	fmt.Printf("Initial scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
 		stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
 
+	if deleted, err := s.scanner.Cleanup(); err == nil && deleted > 0 {
+		fmt.Printf("Initial cleanup removed %d stale entries.\n", deleted)
+	}
+
 	// 2. Start watcher
 	if err := s.watcher.Start(); err != nil {
 		return fmt.Errorf("failed to start watcher: %w", err)
@@ -94,9 +98,14 @@ func (s *Service) Run(ctx context.Context) error {
 			stats, err := s.scanner.Scan()
 			if err != nil {
 				fmt.Printf("Scheduled scan failed: %v\n", err)
+			} else {
+				fmt.Printf("Scheduled scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
+					stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
 			}
-			fmt.Printf("Scheduled scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
-				stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
+
+			if deleted, err := s.scanner.Cleanup(); err == nil && deleted > 0 {
+				fmt.Printf("Scheduled cleanup removed %d stale entries.\n", deleted)
+			}
 		}
 	}
 }

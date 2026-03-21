@@ -44,6 +44,9 @@ batch_size: 1000  # Max files to hash per scan cycle (0 for unlimited)
 # Trigger a manual scan
 ./fh-cli -config config.yaml -batch 1000 scan
 
+# Remove non-existent entries from DB
+./fh-cli -config config.yaml cleanup
+
 # Verify files against DB
 ./fh-cli -config config.yaml check
 ```
