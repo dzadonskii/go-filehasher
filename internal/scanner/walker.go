@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"strings"
+
 	"github.com/ideasmus/go-filehasher/internal/db"
 	"github.com/ideasmus/go-filehasher/internal/hasher"
 	"github.com/ideasmus/go-filehasher/internal/merkle"
@@ -32,6 +34,9 @@ func New(database *db.DB, root string, batchSize int) *Scanner {
 	absRoot, err := filepath.Abs(root)
 	if err == nil {
 		root = absRoot
+	}
+	if !strings.HasSuffix(root, string(os.PathSeparator)) {
+		root += string(os.PathSeparator)
 	}
 	return &Scanner{
 		db:        database,
@@ -86,7 +91,7 @@ func (s *Scanner) Scan() (ScanStats, error) {
 			if err := s.db.DeleteFileTx(tx, relPath); err != nil {
 				return s.stats, fmt.Errorf("failed to delete missing entry %s: %w", absPath, err)
 			}
-			fmt.Printf("Deleted: %s\n", absPath)
+			fmt.Printf("Deleted: %s\n", relPath)
 			s.stats.Deleted++
 		}
 	}
@@ -136,7 +141,7 @@ func (s *Scanner) scanDirTx(tx *sql.Tx, dirPath string, knownEntries map[string]
 				} else {
 					hash, err := hasher.HashFile(fullPath)
 					if err != nil {
-						fmt.Printf("Error hashing %s: %v\n", fullPath, err)
+						fmt.Printf("Error hashing %s: %v\n", s.rel(fullPath), err)
 						continue
 					}
 					s.hashedCount++
@@ -154,10 +159,10 @@ func (s *Scanner) scanDirTx(tx *sql.Tx, dirPath string, knownEntries map[string]
 					}
 
 					if exists {
-						fmt.Printf("Updated: %s\n", fullPath)
+						fmt.Printf("Updated: %s\n", s.rel(fullPath))
 						s.stats.Updated++
 					} else {
-						fmt.Printf("Added: %s\n", fullPath)
+						fmt.Printf("Added: %s\n", s.rel(fullPath))
 						s.stats.Added++
 					}
 				}
@@ -198,10 +203,10 @@ func (s *Scanner) scanDirTx(tx *sql.Tx, dirPath string, knownEntries map[string]
 				return "", fmt.Errorf("failed to upsert dir %s: %w", dirPath, err)
 			}
 			if exists {
-				fmt.Printf("Updated: %s (dir)\n", dirPath)
+				fmt.Printf("Updated: %s (dir)\n", s.rel(dirPath))
 				s.stats.Updated++
 			} else {
-				fmt.Printf("Added: %s (dir)\n", dirPath)
+				fmt.Printf("Added: %s (dir)\n", s.rel(dirPath))
 				s.stats.Added++
 			}
 		} else {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -54,6 +55,9 @@ func main() {
 	if err == nil {
 		finalRootPath = absRoot
 	}
+	if !strings.HasSuffix(finalRootPath, string(os.PathSeparator)) {
+		finalRootPath += string(os.PathSeparator)
+	}
 
 	cmd := args[0]
 	database, err := db.New(finalDBPath)
@@ -97,7 +101,6 @@ func listEntries(database *db.DB, root string) {
 	files := 0
 	for _, p := range paths {
 		f := entries[p]
-		fullPath := filepath.Join(root, f.Path)
 		fileType := "FILE"
 		if f.IsDir {
 			fileType = "DIR"
@@ -109,7 +112,7 @@ func listEntries(database *db.DB, root string) {
 		if f.IsDir {
 			sizeStr = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", fullPath, fileType, sizeStr, f.Mtime.Format(time.RFC3339), f.Hash)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", f.Path, fileType, sizeStr, f.Mtime.Format(time.RFC3339), f.Hash)
 	}
 	w.Flush()
 
@@ -150,9 +153,10 @@ func checkEntries(database *db.DB, root string) {
 	for _, p := range paths {
 		f := entries[p]
 		fullPath := filepath.Join(root, f.Path)
+		relPath := f.Path
 		if f.IsDir {
 			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-				fmt.Printf("[MISSING DIR] %s\n", fullPath)
+				fmt.Printf("[MISSING DIR] %s\n", relPath)
 				mismatches++
 			} else {
 				good++
@@ -163,11 +167,11 @@ func checkEntries(database *db.DB, root string) {
 		// File check
 		info, err := os.Stat(fullPath)
 		if os.IsNotExist(err) {
-			fmt.Printf("[MISSING FILE] %s\n", fullPath)
+			fmt.Printf("[MISSING FILE] %s\n", relPath)
 			mismatches++
 			continue
 		} else if err != nil {
-			fmt.Printf("[ERROR] Could not access %s: %v\n", fullPath, err)
+			fmt.Printf("[ERROR] Could not access %s: %v\n", relPath, err)
 			mismatches++
 			continue
 		}
@@ -176,13 +180,13 @@ func checkEntries(database *db.DB, root string) {
 		// Check hash
 		currentHash, err := hasher.HashFile(fullPath)
 		if err != nil {
-			fmt.Printf("[ERROR] Could not hash %s: %v\n", fullPath, err)
+			fmt.Printf("[ERROR] Could not hash %s: %v\n", relPath, err)
 			mismatches++
 			continue
 		}
 
 		if currentHash != f.Hash {
-			fmt.Printf("[MISMATCH] %s (Expected: %s, Found: %s)\n", fullPath, f.Hash, currentHash)
+			fmt.Printf("[MISMATCH] %s (Expected: %s, Found: %s)\n", relPath, f.Hash, currentHash)
 			mismatches++
 		} else {
 			good++

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ideasmus/go-filehasher/internal/db"
@@ -32,6 +33,9 @@ func New(cfg Config) (*Service, error) {
 	absRoot, err := filepath.Abs(cfg.RootPath)
 	if err == nil {
 		cfg.RootPath = absRoot
+	}
+	if !strings.HasSuffix(cfg.RootPath, string(os.PathSeparator)) {
+		cfg.RootPath += string(os.PathSeparator)
 	}
 
 	database, err := db.New(cfg.DBPath)
@@ -80,9 +84,9 @@ func (s *Service) Run(ctx context.Context) error {
 			return nil
 
 		case event := <-s.watcher.Events:
-			fmt.Printf("Watcher event: %v on %s\n", event.Type, event.Path)
+			fmt.Printf("Watcher event: %v on %s\n", event.Type, s.rel(event.Path))
 			if err := s.handleWatcherEvent(event); err != nil {
-				fmt.Printf("Error handling watcher event for %s: %v\n", event.Path, err)
+				fmt.Printf("Error handling watcher event for %s: %v\n", s.rel(event.Path), err)
 			}
 
 		case <-ticker.C:
@@ -112,7 +116,7 @@ func (s *Service) handleWatcherEvent(event watcher.Event) error {
 		info, err := os.Stat(event.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				fmt.Printf("Deleted: %s (via watcher)\n", event.Path)
+				fmt.Printf("Deleted: %s (via watcher)\n", relPath)
 				return s.db.DeleteFile(relPath)
 			}
 			return err
@@ -132,9 +136,9 @@ func (s *Service) handleWatcherEvent(event watcher.Event) error {
 			})
 			if err == nil {
 				if existing == nil {
-					fmt.Printf("Added: %s (dir)\n", event.Path)
+					fmt.Printf("Added: %s (dir)\n", relPath)
 				} else {
-					fmt.Printf("Updated: %s (dir)\n", event.Path)
+					fmt.Printf("Updated: %s (dir)\n", relPath)
 				}
 			}
 			return err
@@ -154,15 +158,15 @@ func (s *Service) handleWatcherEvent(event watcher.Event) error {
 		})
 		if err == nil {
 			if existing == nil {
-				fmt.Printf("Added: %s\n", event.Path)
+				fmt.Printf("Added: %s\n", relPath)
 			} else {
-				fmt.Printf("Updated: %s\n", event.Path)
+				fmt.Printf("Updated: %s\n", relPath)
 			}
 		}
 		return err
 
 	case watcher.EventDelete:
-		fmt.Printf("Deleted: %s\n", event.Path)
+		fmt.Printf("Deleted: %s\n", relPath)
 		return s.db.DeleteFile(relPath)
 	}
 	return nil
