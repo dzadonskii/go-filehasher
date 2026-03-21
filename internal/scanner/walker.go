@@ -53,6 +53,45 @@ func (s *Scanner) rel(path string) string {
 	return rel
 }
 
+func (s *Scanner) Cleanup() (int, error) {
+	relKnownEntries, err := s.db.GetAllPaths()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get known paths: %w", err)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	deletedCount := 0
+	for relPath := range relKnownEntries {
+		// 1. If path starts with / (old absolute format), delete it
+		if strings.HasPrefix(relPath, "/") {
+			if err := s.db.DeleteFileTx(tx, relPath); err != nil {
+				return deletedCount, fmt.Errorf("failed to delete old entry %s: %w", relPath, err)
+			}
+			fmt.Printf("Deleted (old format): %s\n", relPath)
+			deletedCount++
+			continue
+		}
+
+		// 2. Check if file exists on disk relative to root
+		fullPath := filepath.Join(s.root, relPath)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			if err := s.db.DeleteFileTx(tx, relPath); err != nil {
+				return deletedCount, fmt.Errorf("failed to delete missing entry %s: %w", relPath, err)
+			}
+			fmt.Printf("Deleted (missing): %s\n", relPath)
+			deletedCount++
+		}
+	}
+
+	err = tx.Commit()
+	return deletedCount, err
+}
+
 func (s *Scanner) Scan() (ScanStats, error) {
 	s.hashedCount = 0 // Reset for each scan
 	s.stats = ScanStats{}
@@ -79,21 +118,25 @@ func (s *Scanner) Scan() (ScanStats, error) {
 	defer tx.Rollback()
 
 	// 2. Start recursive scan from root
-	_, err = s.scanDirTx(tx, s.root, knownEntries, foundPaths)
+	rootHash, err := s.scanDirTx(tx, s.root, knownEntries, foundPaths)
 	if err != nil {
 		return s.stats, err
 	}
 
-	// 3. Detect deletions
-	for absPath := range knownEntries {
-		if _, found := foundPaths[absPath]; !found {
-			relPath := s.rel(absPath)
-			if err := s.db.DeleteFileTx(tx, relPath); err != nil {
-				return s.stats, fmt.Errorf("failed to delete missing entry %s: %w", absPath, err)
+	// 3. Detect deletions (only if full scan)
+	if s.BatchSize == 0 || rootHash != "" {
+		for absPath := range knownEntries {
+			if _, found := foundPaths[absPath]; !found {
+				relPath := s.rel(absPath)
+				if err := s.db.DeleteFileTx(tx, relPath); err != nil {
+					return s.stats, fmt.Errorf("failed to delete missing entry %s: %w", absPath, err)
+				}
+				fmt.Printf("Deleted: %s\n", relPath)
+				s.stats.Deleted++
 			}
-			fmt.Printf("Deleted: %s\n", relPath)
-			s.stats.Deleted++
 		}
+	} else {
+		fmt.Printf("Batch size reached (%d), skipping deletion detection.\n", s.BatchSize)
 	}
 
 	err = tx.Commit()
@@ -112,6 +155,11 @@ func (s *Scanner) scanDirTx(tx *sql.Tx, dirPath string, knownEntries map[string]
 	fullyScanned := true
 
 	for _, d := range entries {
+		if s.BatchSize > 0 && s.hashedCount >= s.BatchSize {
+			fullyScanned = false
+			break // Stop walking once batch size reached
+		}
+
 		fullPath := filepath.Join(dirPath, d.Name())
 		info, err := d.Info()
 		if err != nil {

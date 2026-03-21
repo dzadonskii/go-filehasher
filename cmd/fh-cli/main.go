@@ -29,9 +29,10 @@ func main() {
 	if len(args) < 1 {
 		fmt.Println("Usage: fh-cli [flags] <command>")
 		fmt.Println("Commands:")
-		fmt.Println("  list   - list all entries in DB")
-		fmt.Println("  scan   - initiate manual scan of root path")
-		fmt.Println("  check  - verify DB entries against disk")
+		fmt.Println("  list    - list all entries in DB")
+		fmt.Println("  scan    - initiate manual scan of root path")
+		fmt.Println("  check   - verify DB entries against disk")
+		fmt.Println("  cleanup - remove non-existent entries from DB")
 		os.Exit(1)
 	}
 
@@ -73,6 +74,8 @@ func main() {
 		runScan(database, finalRootPath, finalBatchSize)
 	case "check":
 		checkEntries(database, finalRootPath)
+	case "cleanup":
+		runCleanup(database, finalRootPath)
 	default:
 		log.Fatalf("Unknown command: %s", cmd)
 	}
@@ -96,7 +99,7 @@ func listEntries(database *db.DB, root string) {
 	sort.Strings(paths)
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PATH\tTYPE\tSIZE\tMODTIME\tHASH")
+	fmt.Fprintln(w, "PATH\tTYPE\tSIZE\tMODTIME\tUPDATED_AT\tHASH")
 	dirs := 0
 	files := 0
 	for _, p := range paths {
@@ -112,7 +115,7 @@ func listEntries(database *db.DB, root string) {
 		if f.IsDir {
 			sizeStr = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", f.Path, fileType, sizeStr, f.Mtime.Format(time.RFC3339), f.Hash)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", f.Path, fileType, sizeStr, f.Mtime.Format(time.RFC3339), f.UpdatedAt.Format(time.RFC3339), f.Hash)
 	}
 	w.Flush()
 
@@ -129,6 +132,16 @@ func runScan(database *db.DB, root string, batchSize int) {
 	fmt.Printf("\nSummary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
 		stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
 	fmt.Println("Manual scan complete.")
+}
+
+func runCleanup(database *db.DB, root string) {
+	fmt.Printf("Starting cleanup of database for %s...\n", root)
+	s := scanner.New(database, root, 0)
+	count, err := s.Cleanup()
+	if err != nil {
+		log.Fatalf("Cleanup failed: %v", err)
+	}
+	fmt.Printf("\nCleanup complete. Removed %d entries.\n", count)
 }
 
 func checkEntries(database *db.DB, root string) {

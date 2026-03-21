@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/ideasmus/go-filehasher/internal/models"
 	_ "modernc.org/sqlite"
@@ -26,11 +27,19 @@ func New(dbPath string) (*DB, error) {
 			hash TEXT,
 			size INTEGER,
 			mtime DATETIME,
+			updated_at DATETIME,
 			is_dir BOOLEAN
 		);
 		CREATE INDEX IF NOT EXISTS idx_mtime ON entries(mtime);
 	`); err != nil {
 		return nil, fmt.Errorf("failed to create tables: %w", err)
+	}
+
+	// Migration: ensure updated_at exists
+	var exists int
+	err = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name = 'updated_at'").Scan(&exists)
+	if err == nil && exists == 0 {
+		_, _ = db.Exec("ALTER TABLE entries ADD COLUMN updated_at DATETIME")
 	}
 
 	return &DB{db: db}, nil
@@ -46,19 +55,21 @@ func (d *DB) UpsertFile(f models.FileInfo) error {
 
 func (d *DB) UpsertFileTx(tx *sql.Tx, f models.FileInfo) error {
 	query := `
-		INSERT INTO entries (path, hash, size, mtime, is_dir)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO entries (path, hash, size, mtime, updated_at, is_dir)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
 			hash = EXCLUDED.hash,
 			size = EXCLUDED.size,
 			mtime = EXCLUDED.mtime,
+			updated_at = EXCLUDED.updated_at,
 			is_dir = EXCLUDED.is_dir
 	`
+	now := time.Now()
 	var err error
 	if tx != nil {
-		_, err = tx.Exec(query, f.Path, f.Hash, f.Size, f.Mtime, f.IsDir)
+		_, err = tx.Exec(query, f.Path, f.Hash, f.Size, f.Mtime, now, f.IsDir)
 	} else {
-		_, err = d.db.Exec(query, f.Path, f.Hash, f.Size, f.Mtime, f.IsDir)
+		_, err = d.db.Exec(query, f.Path, f.Hash, f.Size, f.Mtime, now, f.IsDir)
 	}
 	return err
 }
@@ -69,8 +80,8 @@ func (d *DB) Begin() (*sql.Tx, error) {
 
 func (d *DB) GetFileInfo(path string) (*models.FileInfo, error) {
 	var f models.FileInfo
-	err := d.db.QueryRow("SELECT path, hash, size, mtime, is_dir FROM entries WHERE path = ?", path).
-		Scan(&f.Path, &f.Hash, &f.Size, &f.Mtime, &f.IsDir)
+	err := d.db.QueryRow("SELECT path, hash, size, mtime, updated_at, is_dir FROM entries WHERE path = ?", path).
+		Scan(&f.Path, &f.Hash, &f.Size, &f.Mtime, &f.UpdatedAt, &f.IsDir)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -95,7 +106,7 @@ func (d *DB) DeleteFileTx(tx *sql.Tx, path string) error {
 }
 
 func (d *DB) GetAllPaths() (map[string]models.FileInfo, error) {
-	rows, err := d.db.Query("SELECT path, hash, mtime, size, is_dir FROM entries")
+	rows, err := d.db.Query("SELECT path, hash, mtime, updated_at, size, is_dir FROM entries")
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +115,7 @@ func (d *DB) GetAllPaths() (map[string]models.FileInfo, error) {
 	entries := make(map[string]models.FileInfo)
 	for rows.Next() {
 		var f models.FileInfo
-		if err := rows.Scan(&f.Path, &f.Hash, &f.Mtime, &f.Size, &f.IsDir); err != nil {
+		if err := rows.Scan(&f.Path, &f.Hash, &f.Mtime, &f.UpdatedAt, &f.Size, &f.IsDir); err != nil {
 			return nil, err
 		}
 		entries[f.Path] = f
