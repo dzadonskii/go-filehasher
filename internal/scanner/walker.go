@@ -134,11 +134,6 @@ func (s *Scanner) Scan() (ScanStats, error) {
 				fmt.Printf("Deleted: %s\n", relPath)
 				s.stats.Deleted++
 			}
-<<<<<<< HEAD
-			fmt.Printf("Deleted: %s\n", relPath)
-			s.stats.Deleted++
-=======
->>>>>>> cc241d5 (logic optimization + cleanup command)
 		}
 	} else {
 		fmt.Printf("Batch size reached (%d), skipping deletion detection.\n", s.BatchSize)

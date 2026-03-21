@@ -115,11 +115,7 @@ func listEntries(database *db.DB, root string) {
 		if f.IsDir {
 			sizeStr = "-"
 		}
-<<<<<<< HEAD
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", f.Path, fileType, sizeStr, f.Mtime.Format(time.RFC3339), f.Hash)
-=======
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", f.Path, fileType, sizeStr, f.Mtime.Format(time.RFC3339), f.UpdatedAt.Format(time.RFC3339), f.Hash)
->>>>>>> cc241d5 (logic optimization + cleanup command)
 	}
 	w.Flush()
 
