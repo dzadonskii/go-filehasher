@@ -1,0 +1,4 @@
+root_path: /data/
+db_path: /config/fh.db
+scan_interval: 1h
+batch_size: 1000  # Max files to hash per scan cycle (0 for unlimited)
