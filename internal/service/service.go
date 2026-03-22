@@ -16,10 +16,11 @@ import (
 )
 
 type Config struct {
-	RootPath     string
-	DBPath       string
-	ScanInterval time.Duration
-	BatchSize    int
+	RootPath          string
+	DBPath            string
+	ScanInterval      time.Duration
+	BatchSize         int
+	DBCommitThreshold int
 }
 
 type Service struct {
@@ -48,7 +49,7 @@ func New(cfg Config) (*Service, error) {
 		return nil, err
 	}
 
-	s := scanner.New(database, cfg.RootPath, cfg.BatchSize)
+	s := scanner.New(database, cfg.RootPath, cfg.BatchSize, cfg.DBCommitThreshold)
 
 	return &Service{
 		cfg:     cfg,

@@ -25,6 +25,7 @@ root_path: /path/to/monitor
 db_path: /path/to/fh.db
 scan_interval: 1h
 batch_size: 1000  # Max files to hash per scan cycle (0 for unlimited)
+db_commit_threshold: 1000  # Records per DB transaction commit (default: 1000)
 ```
 
 ## Usage

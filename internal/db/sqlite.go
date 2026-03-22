@@ -114,6 +114,25 @@ func (d *DB) DeleteFileTx(tx *sql.Tx, path string) error {
 	return err
 }
 
+func (d *DB) IterateEntries(fn func(models.FileInfo) error) error {
+	rows, err := d.db.Query("SELECT path, hash, mtime, updated_at, size, is_dir FROM entries")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var f models.FileInfo
+		if err := rows.Scan(&f.Path, &f.Hash, &f.Mtime, &f.UpdatedAt, &f.Size, &f.IsDir); err != nil {
+			return err
+		}
+		if err := fn(f); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 func (d *DB) GetAllPaths() (map[string]models.FileInfo, error) {
 	rows, err := d.db.Query("SELECT path, hash, mtime, updated_at, size, is_dir FROM entries")
 	if err != nil {

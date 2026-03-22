@@ -23,10 +23,11 @@ func main() {
 	}
 
 	svc, err := service.New(service.Config{
-		RootPath:     cfg.RootPath,
-		DBPath:       cfg.DBPath,
-		ScanInterval: cfg.ScanInterval,
-		BatchSize:    cfg.BatchSize,
+		RootPath:          cfg.RootPath,
+		DBPath:            cfg.DBPath,
+		ScanInterval:      cfg.ScanInterval,
+		BatchSize:         cfg.BatchSize,
+		DBCommitThreshold: cfg.DBCommitThreshold,
 	})
 	if err != nil {
 		log.Fatalf("Failed to initialize service: %v", err)
