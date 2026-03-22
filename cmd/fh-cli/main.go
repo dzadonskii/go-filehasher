@@ -26,11 +26,14 @@ func main() {
 	dbPath := flag.String("db", "fim.db", "SQLite DB file path (overridden by config if provided)")
 	rootPath := flag.String("root", ".", "Root path for manual scan (overridden by config if provided)")
 	batchSize := flag.Int("batch", 0, "Batch size for scanning (overridden by config if provided)")
+	commitThreshold := flag.Int("commit-threshold", 0, "DB commit threshold (overridden by config if provided)")
 	flag.Parse()
 
 	args := flag.Args()
 	if len(args) < 1 {
 		fmt.Println("Usage: fh-cli [flags] <command>")
+		fmt.Println("Flags:")
+		flag.PrintDefaults()
 		fmt.Println("Commands:")
 		fmt.Println("  list    - list all entries in DB")
 		fmt.Println("  scan    - initiate manual scan of root path")
@@ -42,6 +45,10 @@ func main() {
 	finalDBPath := *dbPath
 	finalRootPath := *rootPath
 	finalBatchSize := *batchSize
+	finalCommitThreshold := *commitThreshold
+	if finalCommitThreshold <= 0 {
+		finalCommitThreshold = 1000
+	}
 
 	if *configPath != "" {
 		cfg, err := config.Load(*configPath)
@@ -50,6 +57,9 @@ func main() {
 		}
 		finalDBPath = cfg.DBPath
 		finalRootPath = cfg.RootPath
+		if *commitThreshold == 0 {
+			finalCommitThreshold = cfg.DBCommitThreshold
+		}
 		if *batchSize == 0 {
 			finalBatchSize = cfg.BatchSize
 		}
@@ -77,11 +87,11 @@ func main() {
 	case "list":
 		listEntries(database, finalRootPath)
 	case "scan":
-		runScan(ctx, database, finalRootPath, finalBatchSize)
+		runScan(ctx, database, finalRootPath, finalBatchSize, finalCommitThreshold)
 	case "check":
 		checkEntries(database, finalRootPath)
 	case "cleanup":
-		runCleanup(ctx, database, finalRootPath)
+		runCleanup(ctx, database, finalRootPath, finalCommitThreshold)
 	default:
 		log.Fatalf("Unknown command: %s", cmd)
 	}
@@ -128,9 +138,9 @@ func listEntries(database *db.DB, root string) {
 	fmt.Printf("\nSummary: %d directories, %d files\n", dirs, files)
 }
 
-func runScan(ctx context.Context, database *db.DB, root string, batchSize int) {
+func runScan(ctx context.Context, database *db.DB, root string, batchSize int, commitThreshold int) {
 	fmt.Printf("Starting manual scan of %s (batch size: %d)...\n", root, batchSize)
-	s := scanner.New(database, root, batchSize)
+	s := scanner.New(database, root, batchSize, commitThreshold)
 	stats, err := s.Scan(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -146,9 +156,9 @@ func runScan(ctx context.Context, database *db.DB, root string, batchSize int) {
 	}
 }
 
-func runCleanup(ctx context.Context, database *db.DB, root string) {
+func runCleanup(ctx context.Context, database *db.DB, root string, commitThreshold int) {
 	fmt.Printf("Starting cleanup of database for %s...\n", root)
-	s := scanner.New(database, root, 0)
+	s := scanner.New(database, root, 0, commitThreshold)
 	count, err := s.Cleanup(ctx)
 	if err != nil {
 		if ctx.Err() != nil {

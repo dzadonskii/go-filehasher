@@ -9,10 +9,11 @@ import (
 )
 
 type Config struct {
-	RootPath     string        `yaml:"root_path"`
-	DBPath       string        `yaml:"db_path"`
-	ScanInterval time.Duration `yaml:"scan_interval"`
-	BatchSize    int           `yaml:"batch_size"`
+	RootPath          string        `yaml:"root_path"`
+	DBPath            string        `yaml:"db_path"`
+	ScanInterval      time.Duration `yaml:"scan_interval"`
+	BatchSize         int           `yaml:"batch_size"`
+	DBCommitThreshold int           `yaml:"db_commit_threshold"`
 }
 
 func Load(path string) (*Config, error) {
@@ -33,6 +34,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.ScanInterval == 0 {
 		cfg.ScanInterval = 1 * time.Hour
+	}
+	if cfg.DBCommitThreshold <= 0 {
+		cfg.DBCommitThreshold = 1000
 	}
 
 	return &cfg, nil

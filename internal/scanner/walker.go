@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"strings"
 
@@ -23,19 +22,18 @@ type ScanStats struct {
 	Unchanged int
 }
 
-const commitThreshold = 1000
-
 type Scanner struct {
-	db          *db.DB
-	root        string
-	BatchSize   int
-	hashedCount int
-	stats       ScanStats
-	tx          *sql.Tx
-	txCount     int
+	db              *db.DB
+	root            string
+	BatchSize       int
+	CommitThreshold int
+	hashedCount     int
+	stats           ScanStats
+	tx              *sql.Tx
+	txCount         int
 }
 
-func New(database *db.DB, root string, batchSize int) *Scanner {
+func New(database *db.DB, root string, batchSize int, commitThreshold int) *Scanner {
 	absRoot, err := filepath.Abs(root)
 	if err == nil {
 		root = absRoot
@@ -43,10 +41,14 @@ func New(database *db.DB, root string, batchSize int) *Scanner {
 	if !strings.HasSuffix(root, string(os.PathSeparator)) {
 		root += string(os.PathSeparator)
 	}
+	if commitThreshold <= 0 {
+		commitThreshold = 1000
+	}
 	return &Scanner{
-		db:        database,
-		root:      root,
-		BatchSize: batchSize,
+		db:              database,
+		root:            root,
+		BatchSize:       batchSize,
+		CommitThreshold: commitThreshold,
 	}
 }
 
@@ -94,7 +96,7 @@ func (s *Scanner) rollbackTx() {
 
 func (s *Scanner) commitIfNeeded() error {
 	s.txCount++
-	if s.txCount >= commitThreshold {
+	if s.txCount >= s.CommitThreshold {
 		if err := s.commitTx(); err != nil {
 			return err
 		}
@@ -104,49 +106,46 @@ func (s *Scanner) commitIfNeeded() error {
 }
 
 func (s *Scanner) Cleanup(ctx context.Context) (int, error) {
-	relKnownEntries, err := s.db.GetAllPaths()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get known paths: %w", err)
-	}
-
 	if err := s.beginTx(); err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer s.rollbackTx()
 
 	deletedCount := 0
-	for relPath := range relKnownEntries {
+	err := s.db.IterateEntries(func(f models.FileInfo) error {
 		select {
 		case <-ctx.Done():
-			_ = s.commitTx() // Commit what we deleted so far
-			return deletedCount, ctx.Err()
+			return ctx.Err()
 		default:
 		}
+
+		relPath := f.Path
 		// 1. If path starts with / (old absolute format), delete it
 		if strings.HasPrefix(relPath, "/") {
 			if err := s.db.DeleteFileTx(s.tx, relPath); err != nil {
-				return deletedCount, fmt.Errorf("failed to delete old entry %s: %w", relPath, err)
+				return fmt.Errorf("failed to delete old entry %s: %w", relPath, err)
 			}
 			fmt.Printf("Deleted (old format): %s\n", relPath)
 			deletedCount++
-			if err := s.commitIfNeeded(); err != nil {
-				return deletedCount, err
-			}
-			continue
+			return s.commitIfNeeded()
 		}
 
 		// 2. Check if file exists on disk relative to root
 		fullPath := filepath.Join(s.root, relPath)
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			if err := s.db.DeleteFileTx(s.tx, relPath); err != nil {
-				return deletedCount, fmt.Errorf("failed to delete missing entry %s: %w", relPath, err)
+				return fmt.Errorf("failed to delete missing entry %s: %w", relPath, err)
 			}
 			fmt.Printf("Deleted (missing): %s\n", relPath)
 			deletedCount++
-			if err := s.commitIfNeeded(); err != nil {
-				return deletedCount, err
-			}
+			return s.commitIfNeeded()
 		}
+		return nil
+	})
+
+	if err != nil {
+		_ = s.commitTx() // Commit what we deleted so far
+		return deletedCount, err
 	}
 
 	err = s.commitTx()
@@ -156,70 +155,29 @@ func (s *Scanner) Cleanup(ctx context.Context) (int, error) {
 func (s *Scanner) Scan(ctx context.Context) (ScanStats, error) {
 	s.hashedCount = 0 // Reset for each scan
 	s.stats = ScanStats{}
-	// 1. Get all known entries from DB to detect deletions later
-	relKnownEntries, err := s.db.GetAllPaths()
-	if err != nil {
-		return s.stats, fmt.Errorf("failed to get known paths: %w", err)
-	}
-
-	// Convert relative known entries back to absolute for easier lookup during scan
-	knownEntries := make(map[string]models.FileInfo)
-	for relPath, info := range relKnownEntries {
-		absPath := filepath.Join(s.root, relPath)
-		info.Path = absPath
-		knownEntries[absPath] = info
-	}
-
-	foundPaths := make(map[string]struct{})
 
 	if err := s.beginTx(); err != nil {
 		return s.stats, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer s.rollbackTx()
 
-	// 2. Start recursive scan from root
-	rootHash, err := s.scanDir(ctx, s.root, knownEntries, foundPaths)
+	// 1. Start recursive scan from root
+	_, err := s.scanDir(ctx, s.root)
 	if err != nil {
 		_ = s.commitTx() // Commit progress even if interrupted
 		return s.stats, err
-	}
-
-	// 3. Detect deletions (only if full scan)
-	if s.BatchSize == 0 || rootHash != "" {
-		for absPath := range knownEntries {
-			select {
-			case <-ctx.Done():
-				_ = s.commitTx()
-				return s.stats, ctx.Err()
-			default:
-			}
-			if _, found := foundPaths[absPath]; !found {
-				relPath := s.rel(absPath)
-				if err := s.db.DeleteFileTx(s.tx, relPath); err != nil {
-					return s.stats, fmt.Errorf("failed to delete missing entry %s: %w", absPath, err)
-				}
-				fmt.Printf("Deleted: %s\n", relPath)
-				s.stats.Deleted++
-				if err := s.commitIfNeeded(); err != nil {
-					return s.stats, err
-				}
-			}
-		}
-	} else {
-		fmt.Printf("Batch size reached (%d), skipping deletion detection.\n", s.BatchSize)
 	}
 
 	err = s.commitTx()
 	return s.stats, err
 }
 
-func (s *Scanner) scanDir(ctx context.Context, dirPath string, knownEntries map[string]models.FileInfo, foundPaths map[string]struct{}) (string, error) {
+func (s *Scanner) scanDir(ctx context.Context, dirPath string) (string, error) {
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
 	default:
 	}
-	foundPaths[dirPath] = struct{}{}
 
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
@@ -228,6 +186,8 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string, knownEntries map[
 
 	var merkleEntries []merkle.Entry
 	fullyScanned := true
+
+	relDirPath := s.rel(dirPath)
 
 	for _, d := range entries {
 		select {
@@ -242,6 +202,7 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string, knownEntries map[
 		}
 
 		fullPath := filepath.Join(dirPath, d.Name())
+		relPath := s.rel(fullPath)
 		info, err := d.Info()
 		if err != nil {
 			continue // Skip files we can't access
@@ -249,7 +210,7 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string, knownEntries map[
 
 		var currentHash string
 		if d.IsDir() {
-			hash, err := s.scanDir(ctx, fullPath, knownEntries, foundPaths)
+			hash, err := s.scanDir(ctx, fullPath)
 			if err != nil {
 				return "", err
 			}
@@ -258,11 +219,13 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string, knownEntries map[
 			}
 			currentHash = hash
 		} else {
-			foundPaths[fullPath] = struct{}{}
-
 			// Check if we need to re-hash
-			known, exists := knownEntries[fullPath]
-			if !exists || !known.Mtime.Equal(info.ModTime()) || known.Size != info.Size() {
+			known, err := s.db.GetFileInfo(relPath)
+			if err != nil {
+				fmt.Printf("Error checking %s in DB: %v\n", relPath, err)
+			}
+
+			if known == nil || !known.Mtime.Equal(info.ModTime()) || known.Size != info.Size() {
 				// Check batch size
 				if s.BatchSize > 0 && s.hashedCount >= s.BatchSize {
 					currentHash = "" // Partial, don't update dir hash
@@ -270,7 +233,7 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string, knownEntries map[
 				} else {
 					hash, err := hasher.HashFile(fullPath)
 					if err != nil {
-						fmt.Printf("Error hashing %s: %v\n", s.rel(fullPath), err)
+						fmt.Printf("Error hashing %s: %v\n", relPath, err)
 						continue
 					}
 					s.hashedCount++
@@ -280,80 +243,68 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string, knownEntries map[
 						return "", err
 					}
 
-					err = s.db.UpsertFileTx(s.tx, models.FileInfo{
-						Path:  s.rel(fullPath),
-						Hash:  currentHash,
+					if err := s.db.UpsertFileTx(s.tx, models.FileInfo{
+						Path:  relPath,
+						Hash:  hash,
 						Size:  info.Size(),
 						Mtime: info.ModTime(),
 						IsDir: false,
-					})
-					if err != nil {
-						return "", fmt.Errorf("failed to upsert %s: %w", fullPath, err)
+					}); err != nil {
+						return "", err
 					}
-
+					if known == nil {
+						fmt.Printf("Added: %s\n", relPath)
+						s.stats.Added++
+					} else {
+						fmt.Printf("Updated: %s\n", relPath)
+						s.stats.Updated++
+					}
 					if err := s.commitIfNeeded(); err != nil {
 						return "", err
 					}
-
-					if exists {
-						fmt.Printf("Updated: %s\n", s.rel(fullPath))
-						s.stats.Updated++
-					} else {
-						fmt.Printf("Added: %s\n", s.rel(fullPath))
-						s.stats.Added++
-					}
 				}
 			} else {
-				currentHash = known.Hash
 				s.stats.Unchanged++
+				currentHash = known.Hash
 			}
 		}
 
 		if currentHash != "" {
-			merkleEntries = append(merkleEntries, merkle.Entry{
-				Name: d.Name(),
-				Hash: currentHash,
-			})
+			merkleEntries = append(merkleEntries, merkle.Entry{Name: d.Name(), Hash: currentHash})
+		} else {
+			fullyScanned = false
 		}
 	}
 
-	// Calculate own Merkle hash if everything below was scanned
-	var dirHash string
+	dirHash := ""
 	if fullyScanned {
 		dirHash = merkle.CalculateDirHash(merkleEntries)
-
-		// Update dir in DB if hash changed
-		known, exists := knownEntries[dirPath]
-		if !exists || known.Hash != dirHash {
-			info, err := os.Stat(dirPath)
-			var mtime time.Time
-			if err == nil {
-				mtime = info.ModTime()
-			}
-			if err := s.beginTx(); err != nil {
-				return "", err
-			}
-			err = s.db.UpsertFileTx(s.tx, models.FileInfo{
-				Path:  s.rel(dirPath),
-				Hash:  dirHash,
-				Mtime: mtime,
-				IsDir: true,
-			})
-			if err != nil {
-				return "", fmt.Errorf("failed to upsert dir %s: %w", dirPath, err)
-			}
-			if err := s.commitIfNeeded(); err != nil {
-				return "", err
-			}
-			if exists {
-				fmt.Printf("Updated: %s (dir)\n", s.rel(dirPath))
-				s.stats.Updated++
+		// Update directory entry in DB
+		info, err := os.Stat(dirPath)
+		if err == nil {
+			known, _ := s.db.GetFileInfo(relDirPath)
+			if known == nil || known.Hash != dirHash {
+				if err := s.beginTx(); err != nil {
+					return "", err
+				}
+				if err := s.db.UpsertFileTx(s.tx, models.FileInfo{
+					Path:  relDirPath,
+					Hash:  dirHash,
+					Mtime: info.ModTime(),
+					IsDir: true,
+				}); err == nil {
+					if known == nil {
+						fmt.Printf("Added: %s (dir)\n", relDirPath)
+						s.stats.Added++
+					} else {
+						fmt.Printf("Updated: %s (dir)\n", relDirPath)
+						s.stats.Updated++
+					}
+					_ = s.commitIfNeeded()
+				}
 			} else {
-				fmt.Printf("Added: %s (dir)\n", s.rel(dirPath))
-				s.stats.Added++
+				s.stats.Unchanged++
 			}
-		} else {
-			s.stats.Unchanged++
 		}
 	}
 
