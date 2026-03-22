@@ -36,7 +36,10 @@ func main() {
 	defer stop()
 
 	fmt.Printf("Starting fh-svc on %s...\n", cfg.RootPath)
-	if err := svc.Run(ctx); err != nil {
+	err = svc.Run(ctx)
+	svc.Close()
+
+	if err != nil {
 		log.Fatalf("Service error: %v", err)
 	}
 	fmt.Println("fh-svc stopped.")

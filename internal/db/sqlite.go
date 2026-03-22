@@ -48,7 +48,13 @@ func New(dbPath string) (*DB, error) {
 	return &DB{db: db}, nil
 }
 
+func (d *DB) Checkpoint() error {
+	_, err := d.db.Exec("PRAGMA wal_checkpoint(PASSIVE)")
+	return err
+}
+
 func (d *DB) Close() error {
+	_ = d.Checkpoint()
 	return d.db.Close()
 }
 
