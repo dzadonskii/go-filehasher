@@ -27,7 +27,7 @@ func New(dbPath string) (*DB, error) {
 			hash TEXT,
 			size INTEGER,
 			mtime DATETIME,
-			updated_at DATETIME,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			is_dir BOOLEAN
 		);
 		CREATE INDEX IF NOT EXISTS idx_mtime ON entries(mtime);
@@ -41,6 +41,9 @@ func New(dbPath string) (*DB, error) {
 	if err == nil && exists == 0 {
 		_, _ = db.Exec("ALTER TABLE entries ADD COLUMN updated_at DATETIME")
 	}
+
+	// Ensure no NULLs in existing databases
+	_, _ = db.Exec("UPDATE entries SET updated_at = mtime WHERE updated_at IS NULL")
 
 	return &DB{db: db}, nil
 }
