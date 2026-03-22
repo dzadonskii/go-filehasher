@@ -72,6 +72,7 @@ func (s *Service) Run(ctx context.Context) error {
 		if deleted, err := s.scanner.Cleanup(ctx); err == nil && deleted > 0 {
 			fmt.Printf("Initial cleanup removed %d stale entries.\n", deleted)
 		}
+		_ = s.db.Checkpoint()
 	}
 
 	// 2. Start watcher
@@ -109,6 +110,7 @@ func (s *Service) Run(ctx context.Context) error {
 			} else {
 				fmt.Printf("Scheduled scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
 					stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
+				_ = s.db.Checkpoint()
 			}
 
 			if deleted, err := s.scanner.Cleanup(ctx); err == nil && deleted > 0 {
@@ -116,6 +118,10 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (s *Service) Close() error {
+	return s.db.Close()
 }
 
 func (s *Service) rel(path string) string {
