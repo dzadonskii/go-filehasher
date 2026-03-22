@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -67,15 +70,18 @@ func main() {
 	}
 	defer database.Close()
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	switch cmd {
 	case "list":
 		listEntries(database, finalRootPath)
 	case "scan":
-		runScan(database, finalRootPath, finalBatchSize)
+		runScan(ctx, database, finalRootPath, finalBatchSize)
 	case "check":
 		checkEntries(database, finalRootPath)
 	case "cleanup":
-		runCleanup(database, finalRootPath)
+		runCleanup(ctx, database, finalRootPath)
 	default:
 		log.Fatalf("Unknown command: %s", cmd)
 	}
@@ -122,24 +128,34 @@ func listEntries(database *db.DB, root string) {
 	fmt.Printf("\nSummary: %d directories, %d files\n", dirs, files)
 }
 
-func runScan(database *db.DB, root string, batchSize int) {
+func runScan(ctx context.Context, database *db.DB, root string, batchSize int) {
 	fmt.Printf("Starting manual scan of %s (batch size: %d)...\n", root, batchSize)
 	s := scanner.New(database, root, batchSize)
-	stats, err := s.Scan()
+	stats, err := s.Scan(ctx)
 	if err != nil {
-		log.Fatalf("Scan failed: %v", err)
+		if ctx.Err() != nil {
+			fmt.Println("\nScan interrupted.")
+		} else {
+			log.Fatalf("Scan failed: %v", err)
+		}
 	}
 	fmt.Printf("\nSummary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
 		stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
-	fmt.Println("Manual scan complete.")
+	if ctx.Err() == nil {
+		fmt.Println("Manual scan complete.")
+	}
 }
 
-func runCleanup(database *db.DB, root string) {
+func runCleanup(ctx context.Context, database *db.DB, root string) {
 	fmt.Printf("Starting cleanup of database for %s...\n", root)
 	s := scanner.New(database, root, 0)
-	count, err := s.Cleanup()
+	count, err := s.Cleanup(ctx)
 	if err != nil {
-		log.Fatalf("Cleanup failed: %v", err)
+		if ctx.Err() != nil {
+			fmt.Println("\nCleanup interrupted.")
+		} else {
+			log.Fatalf("Cleanup failed: %v", err)
+		}
 	}
 	fmt.Printf("\nCleanup complete. Removed %d entries.\n", count)
 }

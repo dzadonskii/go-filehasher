@@ -61,19 +61,24 @@ func New(cfg Config) (*Service, error) {
 func (s *Service) Run(ctx context.Context) error {
 	// 1. Initial scan
 	fmt.Printf("Starting initial scan of %s...\n", s.cfg.RootPath)
-	stats, err := s.scanner.Scan()
-	if err != nil {
+	stats, err := s.scanner.Scan(ctx)
+	if err != nil && ctx.Err() == nil {
 		return fmt.Errorf("initial scan failed: %w", err)
 	}
-	fmt.Printf("Initial scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
-		stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
+	if err == nil {
+		fmt.Printf("Initial scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
+			stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
 
-	if deleted, err := s.scanner.Cleanup(); err == nil && deleted > 0 {
-		fmt.Printf("Initial cleanup removed %d stale entries.\n", deleted)
+		if deleted, err := s.scanner.Cleanup(ctx); err == nil && deleted > 0 {
+			fmt.Printf("Initial cleanup removed %d stale entries.\n", deleted)
+		}
 	}
 
 	// 2. Start watcher
-	if err := s.watcher.Start(); err != nil {
+	if err := s.watcher.Start(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return fmt.Errorf("failed to start watcher: %w", err)
 	}
 	defer s.watcher.Close()
@@ -95,15 +100,18 @@ func (s *Service) Run(ctx context.Context) error {
 
 		case <-ticker.C:
 			fmt.Println("Starting scheduled scan...")
-			stats, err := s.scanner.Scan()
+			stats, err := s.scanner.Scan(ctx)
 			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
 				fmt.Printf("Scheduled scan failed: %v\n", err)
 			} else {
 				fmt.Printf("Scheduled scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
 					stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
 			}
 
-			if deleted, err := s.scanner.Cleanup(); err == nil && deleted > 0 {
+			if deleted, err := s.scanner.Cleanup(ctx); err == nil && deleted > 0 {
 				fmt.Printf("Scheduled cleanup removed %d stale entries.\n", deleted)
 			}
 		}
