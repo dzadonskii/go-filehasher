@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -46,10 +47,15 @@ func New(root string) (*Watcher, error) {
 	}, nil
 }
 
-func (w *Watcher) Start() error {
+func (w *Watcher) Start(ctx context.Context) error {
 	err := filepath.WalkDir(w.root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 		if d.IsDir() {
 			if err := w.watcher.Add(path); err != nil {

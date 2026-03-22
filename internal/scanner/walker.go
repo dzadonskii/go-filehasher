@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -53,7 +54,7 @@ func (s *Scanner) rel(path string) string {
 	return rel
 }
 
-func (s *Scanner) Cleanup() (int, error) {
+func (s *Scanner) Cleanup(ctx context.Context) (int, error) {
 	relKnownEntries, err := s.db.GetAllPaths()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get known paths: %w", err)
@@ -67,6 +68,12 @@ func (s *Scanner) Cleanup() (int, error) {
 
 	deletedCount := 0
 	for relPath := range relKnownEntries {
+		select {
+		case <-ctx.Done():
+			_ = tx.Commit() // Commit what we deleted so far
+			return deletedCount, ctx.Err()
+		default:
+		}
 		// 1. If path starts with / (old absolute format), delete it
 		if strings.HasPrefix(relPath, "/") {
 			if err := s.db.DeleteFileTx(tx, relPath); err != nil {
@@ -92,7 +99,7 @@ func (s *Scanner) Cleanup() (int, error) {
 	return deletedCount, err
 }
 
-func (s *Scanner) Scan() (ScanStats, error) {
+func (s *Scanner) Scan(ctx context.Context) (ScanStats, error) {
 	s.hashedCount = 0 // Reset for each scan
 	s.stats = ScanStats{}
 	// 1. Get all known entries from DB to detect deletions later
@@ -118,14 +125,21 @@ func (s *Scanner) Scan() (ScanStats, error) {
 	defer tx.Rollback()
 
 	// 2. Start recursive scan from root
-	rootHash, err := s.scanDirTx(tx, s.root, knownEntries, foundPaths)
+	rootHash, err := s.scanDirTx(ctx, tx, s.root, knownEntries, foundPaths)
 	if err != nil {
+		_ = tx.Commit() // Commit progress even if interrupted
 		return s.stats, err
 	}
 
 	// 3. Detect deletions (only if full scan)
 	if s.BatchSize == 0 || rootHash != "" {
 		for absPath := range knownEntries {
+			select {
+			case <-ctx.Done():
+				_ = tx.Commit()
+				return s.stats, ctx.Err()
+			default:
+			}
 			if _, found := foundPaths[absPath]; !found {
 				relPath := s.rel(absPath)
 				if err := s.db.DeleteFileTx(tx, relPath); err != nil {
@@ -143,7 +157,12 @@ func (s *Scanner) Scan() (ScanStats, error) {
 	return s.stats, err
 }
 
-func (s *Scanner) scanDirTx(tx *sql.Tx, dirPath string, knownEntries map[string]models.FileInfo, foundPaths map[string]struct{}) (string, error) {
+func (s *Scanner) scanDirTx(ctx context.Context, tx *sql.Tx, dirPath string, knownEntries map[string]models.FileInfo, foundPaths map[string]struct{}) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
 	foundPaths[dirPath] = struct{}{}
 
 	entries, err := os.ReadDir(dirPath)
@@ -155,6 +174,12 @@ func (s *Scanner) scanDirTx(tx *sql.Tx, dirPath string, knownEntries map[string]
 	fullyScanned := true
 
 	for _, d := range entries {
+		select {
+		case <-ctx.Done():
+			fullyScanned = false
+			return "", ctx.Err()
+		default:
+		}
 		if s.BatchSize > 0 && s.hashedCount >= s.BatchSize {
 			fullyScanned = false
 			break // Stop walking once batch size reached
@@ -168,7 +193,7 @@ func (s *Scanner) scanDirTx(tx *sql.Tx, dirPath string, knownEntries map[string]
 
 		var currentHash string
 		if d.IsDir() {
-			hash, err := s.scanDirTx(tx, fullPath, knownEntries, foundPaths)
+			hash, err := s.scanDirTx(ctx, tx, fullPath, knownEntries, foundPaths)
 			if err != nil {
 				return "", err
 			}
