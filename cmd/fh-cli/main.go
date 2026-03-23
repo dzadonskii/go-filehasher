@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -21,24 +22,38 @@ import (
 	"github.com/ideasmus/go-filehasher/internal/scanner"
 )
 
+var globalOut io.Writer = os.Stdout
+
 func main() {
 	configPath := flag.String("config", "", "Path to config file (optional)")
 	dbPath := flag.String("db", "fim.db", "SQLite DB file path (overridden by config if provided)")
 	rootPath := flag.String("root", ".", "Root path for manual scan (overridden by config if provided)")
 	batchSize := flag.Int("batch", 0, "Batch size for scanning (overridden by config if provided)")
 	commitThreshold := flag.Int("commit-threshold", 0, "DB commit threshold (overridden by config if provided)")
+	logPath := flag.String("log", "", "Path to output log file (optional)")
 	flag.Parse()
+
+	if *logPath != "" {
+		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Fatalf("Failed to open log file: %v", err)
+		}
+		defer f.Close()
+		globalOut = io.MultiWriter(os.Stdout, f)
+		log.SetOutput(globalOut)
+	}
 
 	args := flag.Args()
 	if len(args) < 1 {
-		fmt.Println("Usage: fh-cli [flags] <command>")
-		fmt.Println("Flags:")
+		fmt.Fprintln(globalOut, "Usage: fh-cli [flags] <command>")
+		fmt.Fprintln(globalOut, "Flags:")
+		flag.CommandLine.SetOutput(globalOut)
 		flag.PrintDefaults()
-		fmt.Println("Commands:")
-		fmt.Println("  list    - list all entries in DB")
-		fmt.Println("  scan    - initiate manual scan of root path")
-		fmt.Println("  check   - verify DB entries against disk")
-		fmt.Println("  cleanup - remove non-existent entries from DB")
+		fmt.Fprintln(globalOut, "Commands:")
+		fmt.Fprintln(globalOut, "  list    - list all entries in DB")
+		fmt.Fprintln(globalOut, "  scan    - initiate manual scan of root path")
+		fmt.Fprintln(globalOut, "  check   - verify DB entries against disk")
+		fmt.Fprintln(globalOut, "  cleanup - remove non-existent entries from DB")
 		os.Exit(1)
 	}
 
@@ -85,11 +100,11 @@ func main() {
 
 	switch cmd {
 	case "list":
-		listEntries(database, finalRootPath)
+		listEntries(ctx, database, finalRootPath)
 	case "scan":
 		runScan(ctx, database, finalRootPath, finalBatchSize, finalCommitThreshold)
 	case "check":
-		checkEntries(database, finalRootPath)
+		checkEntries(ctx, database, finalRootPath)
 	case "cleanup":
 		runCleanup(ctx, database, finalRootPath, finalCommitThreshold)
 	default:
@@ -97,14 +112,14 @@ func main() {
 	}
 }
 
-func listEntries(database *db.DB, root string) {
+func listEntries(ctx context.Context, database *db.DB, root string) {
 	entries, err := database.GetAllPaths()
 	if err != nil {
 		log.Fatalf("Failed to get entries: %v", err)
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("DB is empty.")
+		fmt.Fprintln(globalOut, "DB is empty.")
 		return
 	}
 
@@ -114,11 +129,17 @@ func listEntries(database *db.DB, root string) {
 	}
 	sort.Strings(paths)
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(globalOut, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "PATH\tTYPE\tSIZE\tMODTIME\tUPDATED_AT\tHASH")
 	dirs := 0
 	files := 0
 	for _, p := range paths {
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(globalOut, "\nListing interrupted.")
+			return
+		default:
+		}
 		f := entries[p]
 		fileType := "FILE"
 		if f.IsDir {
@@ -135,49 +156,51 @@ func listEntries(database *db.DB, root string) {
 	}
 	w.Flush()
 
-	fmt.Printf("\nSummary: %d directories, %d files\n", dirs, files)
+	fmt.Fprintf(globalOut, "\nSummary: %d directories, %d files\n", dirs, files)
 }
 
 func runScan(ctx context.Context, database *db.DB, root string, batchSize int, commitThreshold int) {
-	fmt.Printf("Starting manual scan of %s (batch size: %d)...\n", root, batchSize)
+	fmt.Fprintf(globalOut, "Starting manual scan of %s (batch size: %d)...\n", root, batchSize)
 	s := scanner.New(database, root, batchSize, commitThreshold)
+	s.Out = globalOut
 	stats, err := s.Scan(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
-			fmt.Println("\nScan interrupted.")
+			fmt.Fprintln(globalOut, "\nScan interrupted.")
 		} else {
 			log.Fatalf("Scan failed: %v", err)
 		}
 	}
-	fmt.Printf("\nSummary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
+	fmt.Fprintf(globalOut, "\nSummary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
 		stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
 	if ctx.Err() == nil {
-		fmt.Println("Manual scan complete.")
+		fmt.Fprintln(globalOut, "Manual scan complete.")
 	}
 }
 
 func runCleanup(ctx context.Context, database *db.DB, root string, commitThreshold int) {
-	fmt.Printf("Starting cleanup of database for %s...\n", root)
+	fmt.Fprintf(globalOut, "Starting cleanup of database for %s...\n", root)
 	s := scanner.New(database, root, 0, commitThreshold)
+	s.Out = globalOut
 	count, err := s.Cleanup(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
-			fmt.Println("\nCleanup interrupted.")
+			fmt.Fprintln(globalOut, "\nCleanup interrupted.")
 		} else {
 			log.Fatalf("Cleanup failed: %v", err)
 		}
 	}
-	fmt.Printf("\nCleanup complete. Removed %d entries.\n", count)
+	fmt.Fprintf(globalOut, "\nCleanup complete. Removed %d entries.\n", count)
 }
 
-func checkEntries(database *db.DB, root string) {
+func checkEntries(ctx context.Context, database *db.DB, root string) {
 	entries, err := database.GetAllPaths()
 	if err != nil {
 		log.Fatalf("Failed to get entries: %v", err)
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("DB is empty.")
+		fmt.Fprintln(globalOut, "DB is empty.")
 		return
 	}
 
@@ -190,12 +213,20 @@ func checkEntries(database *db.DB, root string) {
 	mismatches := 0
 	good := 0
 	for _, p := range paths {
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(globalOut, "\nCheck interrupted.")
+			fmt.Fprintf(globalOut, "\nPartial Summary: %d good, %d bad\n", good, mismatches)
+			return
+		default:
+		}
+
 		f := entries[p]
 		fullPath := filepath.Join(root, f.Path)
 		relPath := f.Path
 		if f.IsDir {
 			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-				fmt.Printf("[MISSING DIR] %s\n", relPath)
+				fmt.Fprintf(globalOut, "[MISSING DIR] %s\n", relPath)
 				mismatches++
 			} else {
 				good++
@@ -206,37 +237,39 @@ func checkEntries(database *db.DB, root string) {
 		// File check
 		info, err := os.Stat(fullPath)
 		if os.IsNotExist(err) {
-			fmt.Printf("[MISSING FILE] %s\n", relPath)
+			fmt.Fprintf(globalOut, "[MISSING FILE] %s\n", relPath)
 			mismatches++
 			continue
 		} else if err != nil {
-			fmt.Printf("[ERROR] Could not access %s: %v\n", relPath, err)
+			fmt.Fprintf(globalOut, "[ERROR] Could not access %s: %v\n", relPath, err)
 			mismatches++
 			continue
 		}
 		_ = info // Keep it for now if we want more checks later
 
 		// Check hash
-		currentHash, err := hasher.HashFile(fullPath)
+		currentHash, err := hasher.HashFile(ctx, fullPath)
 		if err != nil {
-			fmt.Printf("[ERROR] Could not hash %s: %v\n", relPath, err)
-			mismatches++
+			if ctx.Err() == nil {
+				fmt.Fprintf(globalOut, "[ERROR] Could not hash %s: %v\n", relPath, err)
+				mismatches++
+			}
 			continue
 		}
 
 		if currentHash != f.Hash {
-			fmt.Printf("[MISMATCH] %s (Expected: %s, Found: %s)\n", relPath, f.Hash, currentHash)
+			fmt.Fprintf(globalOut, "[MISMATCH] %s (Expected: %s, Found: %s)\n", relPath, f.Hash, currentHash)
 			mismatches++
 		} else {
 			good++
 		}
 	}
 
-	fmt.Printf("\nSummary: %d good, %d bad\n", good, mismatches)
+	fmt.Fprintf(globalOut, "\nSummary: %d good, %d bad\n", good, mismatches)
 	if mismatches == 0 {
-		fmt.Println("Check complete. All files matched.")
+		fmt.Fprintln(globalOut, "Check complete. All files matched.")
 	} else {
-		fmt.Printf("Check complete. Found %d mismatches.\n", mismatches)
+		fmt.Fprintf(globalOut, "Check complete. Found %d mismatches.\n", mismatches)
 		os.Exit(2)
 	}
 }

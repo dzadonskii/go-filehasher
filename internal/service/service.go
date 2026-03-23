@@ -96,7 +96,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 		case event := <-s.watcher.Events:
 			fmt.Printf("Watcher event: %v on %s\n", event.Type, s.rel(event.Path))
-			if err := s.handleWatcherEvent(event); err != nil {
+			if err := s.handleWatcherEvent(ctx, event); err != nil {
 				fmt.Printf("Error handling watcher event for %s: %v\n", s.rel(event.Path), err)
 			}
 
@@ -133,7 +133,7 @@ func (s *Service) rel(path string) string {
 	return rel
 }
 
-func (s *Service) handleWatcherEvent(event watcher.Event) error {
+func (s *Service) handleWatcherEvent(ctx context.Context, event watcher.Event) error {
 	relPath := s.rel(event.Path)
 	switch event.Type {
 	case watcher.EventCreate, watcher.EventModify:
@@ -168,7 +168,7 @@ func (s *Service) handleWatcherEvent(event watcher.Event) error {
 			return err
 		}
 
-		hash, err := hasher.HashFile(event.Path)
+		hash, err := hasher.HashFile(ctx, event.Path)
 		if err != nil {
 			return err
 		}

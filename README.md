@@ -39,8 +39,8 @@ db_commit_threshold: 1000  # Records per DB transaction commit (default: 1000)
 ### CLI tool
 
 ```bash
-# List all files and hashes
-./fh-cli -config config.yaml list
+# List all files and hashes (optional: log to file)
+./fh-cli -config config.yaml -log output.log list
 
 # Trigger a manual scan
 ./fh-cli -config config.yaml -batch 1000 scan
