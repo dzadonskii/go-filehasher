@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -31,6 +32,7 @@ type Scanner struct {
 	stats           ScanStats
 	tx              *sql.Tx
 	txCount         int
+	Out             io.Writer
 }
 
 func New(database *db.DB, root string, batchSize int, commitThreshold int) *Scanner {
@@ -49,7 +51,15 @@ func New(database *db.DB, root string, batchSize int, commitThreshold int) *Scan
 		root:            root,
 		BatchSize:       batchSize,
 		CommitThreshold: commitThreshold,
+		Out:             os.Stdout,
 	}
+}
+
+func (s *Scanner) log(format string, a ...any) {
+	if s.Out == nil {
+		s.Out = os.Stdout
+	}
+	fmt.Fprintf(s.Out, format, a...)
 }
 
 func (s *Scanner) rel(path string) string {
@@ -125,7 +135,7 @@ func (s *Scanner) Cleanup(ctx context.Context) (int, error) {
 			if err := s.db.DeleteFileTx(s.tx, relPath); err != nil {
 				return fmt.Errorf("failed to delete old entry %s: %w", relPath, err)
 			}
-			fmt.Printf("Deleted (old format): %s\n", relPath)
+			s.log("Deleted (old format): %s\n", relPath)
 			deletedCount++
 			return s.commitIfNeeded()
 		}
@@ -136,7 +146,7 @@ func (s *Scanner) Cleanup(ctx context.Context) (int, error) {
 			if err := s.db.DeleteFileTx(s.tx, relPath); err != nil {
 				return fmt.Errorf("failed to delete missing entry %s: %w", relPath, err)
 			}
-			fmt.Printf("Deleted (missing): %s\n", relPath)
+			s.log("Deleted (missing): %s\n", relPath)
 			deletedCount++
 			return s.commitIfNeeded()
 		}
@@ -222,7 +232,7 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string) (string, error) {
 			// Check if we need to re-hash
 			known, err := s.db.GetFileInfo(relPath)
 			if err != nil {
-				fmt.Printf("Error checking %s in DB: %v\n", relPath, err)
+				s.log("Error checking %s in DB: %v\n", relPath, err)
 			}
 
 			if known == nil || !known.Mtime.Equal(info.ModTime()) || known.Size != info.Size() {
@@ -231,9 +241,9 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string) (string, error) {
 					currentHash = "" // Partial, don't update dir hash
 					fullyScanned = false
 				} else {
-					hash, err := hasher.HashFile(fullPath)
+					hash, err := hasher.HashFile(ctx, fullPath)
 					if err != nil {
-						fmt.Printf("Error hashing %s: %v\n", relPath, err)
+						s.log("Error hashing %s: %v\n", relPath, err)
 						continue
 					}
 					s.hashedCount++
@@ -253,10 +263,10 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string) (string, error) {
 						return "", err
 					}
 					if known == nil {
-						fmt.Printf("Added: %s\n", relPath)
+						s.log("Added: %s\n", relPath)
 						s.stats.Added++
 					} else {
-						fmt.Printf("Updated: %s\n", relPath)
+						s.log("Updated: %s\n", relPath)
 						s.stats.Updated++
 					}
 					if err := s.commitIfNeeded(); err != nil {
@@ -294,10 +304,10 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string) (string, error) {
 					IsDir: true,
 				}); err == nil {
 					if known == nil {
-						fmt.Printf("Added: %s (dir)\n", relDirPath)
+						s.log("Added: %s (dir)\n", relDirPath)
 						s.stats.Added++
 					} else {
-						fmt.Printf("Updated: %s (dir)\n", relDirPath)
+						s.log("Updated: %s (dir)\n", relDirPath)
 						s.stats.Updated++
 					}
 					_ = s.commitIfNeeded()
