@@ -4,7 +4,7 @@ COPY . .
 RUN go build -o fh-svc cmd/fh-svc/main.go
 RUN go build -o fh-cli cmd/fh-cli/main.go
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 WORKDIR /app
 COPY --from=builder /app/fh-svc .
 COPY --from=builder /app/fh-cli .
