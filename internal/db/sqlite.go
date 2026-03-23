@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ideasmus/go-filehasher/internal/models"
+	"github.com/dzadonskii/go-filehasher/internal/models"
 	_ "modernc.org/sqlite"
 )
 

@@ -1,4 +1,4 @@
-module github.com/ideasmus/go-filehasher
+module github.com/dzadonskii/go-filehasher
 
 go 1.25.8
 

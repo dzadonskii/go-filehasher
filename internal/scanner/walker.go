@@ -10,10 +10,10 @@ import (
 
 	"strings"
 
-	"github.com/ideasmus/go-filehasher/internal/db"
-	"github.com/ideasmus/go-filehasher/internal/hasher"
-	"github.com/ideasmus/go-filehasher/internal/merkle"
-	"github.com/ideasmus/go-filehasher/internal/models"
+	"github.com/dzadonskii/go-filehasher/internal/db"
+	"github.com/dzadonskii/go-filehasher/internal/hasher"
+	"github.com/dzadonskii/go-filehasher/internal/merkle"
+	"github.com/dzadonskii/go-filehasher/internal/models"
 )
 
 type ScanStats struct {
