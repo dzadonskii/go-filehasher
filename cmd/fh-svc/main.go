@@ -9,8 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ideasmus/go-filehasher/internal/config"
-	"github.com/ideasmus/go-filehasher/internal/service"
+	"time"
+
+	"github.com/dzadonskii/go-filehasher/internal/config"
+	"github.com/dzadonskii/go-filehasher/internal/service"
 )
 
 func main() {
@@ -25,7 +27,7 @@ func main() {
 	svc, err := service.New(service.Config{
 		RootPath:          cfg.RootPath,
 		DBPath:            cfg.DBPath,
-		ScanInterval:      cfg.ScanInterval,
+		ScanInterval:      time.Duration(cfg.ScanInterval),
 		BatchSize:         cfg.BatchSize,
 		DBCommitThreshold: cfg.DBCommitThreshold,
 	})

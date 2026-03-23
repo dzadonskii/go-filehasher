@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ideasmus/go-filehasher/internal/db"
-	"github.com/ideasmus/go-filehasher/internal/hasher"
-	"github.com/ideasmus/go-filehasher/internal/models"
-	"github.com/ideasmus/go-filehasher/internal/scanner"
-	"github.com/ideasmus/go-filehasher/internal/watcher"
+	"github.com/dzadonskii/go-filehasher/internal/db"
+	"github.com/dzadonskii/go-filehasher/internal/hasher"
+	"github.com/dzadonskii/go-filehasher/internal/models"
+	"github.com/dzadonskii/go-filehasher/internal/scanner"
+	"github.com/dzadonskii/go-filehasher/internal/watcher"
 )
 
 type Config struct {

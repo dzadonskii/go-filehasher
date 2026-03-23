@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"github.com/ideasmus/go-filehasher/internal/config"
-	"github.com/ideasmus/go-filehasher/internal/db"
-	"github.com/ideasmus/go-filehasher/internal/hasher"
-	"github.com/ideasmus/go-filehasher/internal/scanner"
+	"github.com/dzadonskii/go-filehasher/internal/config"
+	"github.com/dzadonskii/go-filehasher/internal/db"
+	"github.com/dzadonskii/go-filehasher/internal/hasher"
+	"github.com/dzadonskii/go-filehasher/internal/scanner"
 )
 
 var globalOut io.Writer = os.Stdout
