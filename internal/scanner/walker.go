@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"strings"
 
@@ -33,6 +34,7 @@ type Scanner struct {
 	tx              *sql.Tx
 	txCount         int
 	Out             io.Writer
+	LimitPath       string
 }
 
 func New(database *db.DB, root string, batchSize int, commitThreshold int) *Scanner {
@@ -59,7 +61,8 @@ func (s *Scanner) log(format string, a ...any) {
 	if s.Out == nil {
 		s.Out = os.Stdout
 	}
-	fmt.Fprintf(s.Out, format, a...)
+	ts := time.Now().Format("2006-01-02 15:04:05")
+	fmt.Fprintf(s.Out, "[%s] "+format, append([]any{ts}, a...)...)
 }
 
 func (s *Scanner) rel(path string) string {
@@ -142,6 +145,17 @@ func (s *Scanner) Cleanup(ctx context.Context) (int, error) {
 
 		// 2. Check if file exists on disk relative to root
 		fullPath := filepath.Join(s.root, relPath)
+
+		if s.LimitPath != "" {
+			absLimit, _ := filepath.Abs(s.LimitPath)
+			if !filepath.IsAbs(s.LimitPath) {
+				absLimit = filepath.Join(s.root, s.LimitPath)
+			}
+			if !strings.HasPrefix(fullPath, absLimit) {
+				return nil // Skip entries outside limited path
+			}
+		}
+
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			if err := s.db.DeleteFileTx(s.tx, relPath); err != nil {
 				return fmt.Errorf("failed to delete missing entry %s: %w", relPath, err)
@@ -171,8 +185,16 @@ func (s *Scanner) Scan(ctx context.Context) (ScanStats, error) {
 	}
 	defer s.rollbackTx()
 
-	// 1. Start recursive scan from root
-	_, err := s.scanDir(ctx, s.root)
+	// 1. Start recursive scan from start point
+	startPath := s.root
+	if s.LimitPath != "" {
+		startPath = s.LimitPath
+		if !filepath.IsAbs(startPath) {
+			startPath = filepath.Join(s.root, startPath)
+		}
+	}
+
+	_, err := s.scanDir(ctx, startPath)
 	if err != nil {
 		_ = s.commitTx() // Commit progress even if interrupted
 		return s.stats, err
@@ -263,10 +285,10 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string) (string, error) {
 						return "", err
 					}
 					if known == nil {
-						s.log("Added: %s\n", relPath)
+						s.log("Added: %s (%s)\n", relPath, hash)
 						s.stats.Added++
 					} else {
-						s.log("Updated: %s\n", relPath)
+						s.log("Updated: %s (%s)\n", relPath, hash)
 						s.stats.Updated++
 					}
 					if err := s.commitIfNeeded(); err != nil {
@@ -304,10 +326,10 @@ func (s *Scanner) scanDir(ctx context.Context, dirPath string) (string, error) {
 					IsDir: true,
 				}); err == nil {
 					if known == nil {
-						s.log("Added: %s (dir)\n", relDirPath)
+						s.log("Added: %s (dir) (%s)\n", relDirPath, dirHash)
 						s.stats.Added++
 					} else {
-						s.log("Updated: %s (dir)\n", relDirPath)
+						s.log("Updated: %s (dir) (%s)\n", relDirPath, dirHash)
 						s.stats.Updated++
 					}
 					_ = s.commitIfNeeded()

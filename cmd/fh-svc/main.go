@@ -26,6 +26,7 @@ func main() {
 
 	svc, err := service.New(service.Config{
 		RootPath:          cfg.RootPath,
+		LimitPath:         cfg.LimitPath,
 		DBPath:            cfg.DBPath,
 		ScanInterval:      time.Duration(cfg.ScanInterval),
 		BatchSize:         cfg.BatchSize,
@@ -38,12 +39,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fmt.Printf("Starting fh-svc on %s...\n", cfg.RootPath)
+	fmt.Printf("[%s] Starting fh-svc on %s...\n", time.Now().Format("2006-01-02 15:04:05"), cfg.RootPath)
 	err = svc.Run(ctx)
 	svc.Close()
 
 	if err != nil {
 		log.Fatalf("Service error: %v", err)
 	}
-	fmt.Println("fh-svc stopped.")
+	fmt.Printf("[%s] fh-svc stopped.\n", time.Now().Format("2006-01-02 15:04:05"))
 }

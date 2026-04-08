@@ -17,6 +17,7 @@ import (
 
 type Config struct {
 	RootPath          string
+	LimitPath         string
 	DBPath            string
 	ScanInterval      time.Duration
 	BatchSize         int
@@ -50,6 +51,7 @@ func New(cfg Config) (*Service, error) {
 	}
 
 	s := scanner.New(database, cfg.RootPath, cfg.BatchSize, cfg.DBCommitThreshold)
+	s.LimitPath = cfg.LimitPath
 
 	return &Service{
 		cfg:     cfg,
@@ -59,19 +61,24 @@ func New(cfg Config) (*Service, error) {
 	}, nil
 }
 
+func (s *Service) log(format string, a ...any) {
+	ts := time.Now().Format("2006-01-02 15:04:05")
+	fmt.Printf("[%s] "+format, append([]any{ts}, a...)...)
+}
+
 func (s *Service) Run(ctx context.Context) error {
 	// 1. Initial scan
-	fmt.Printf("Starting initial scan of %s...\n", s.cfg.RootPath)
+	s.log("Starting initial scan of %s...\n", s.cfg.RootPath)
 	stats, err := s.scanner.Scan(ctx)
 	if err != nil && ctx.Err() == nil {
 		return fmt.Errorf("initial scan failed: %w", err)
 	}
 	if err == nil {
-		fmt.Printf("Initial scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
+		s.log("Initial scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
 			stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
 
 		if deleted, err := s.scanner.Cleanup(ctx); err == nil && deleted > 0 {
-			fmt.Printf("Initial cleanup removed %d stale entries.\n", deleted)
+			s.log("Initial cleanup removed %d stale entries.\n", deleted)
 		}
 		_ = s.db.Checkpoint()
 	}
@@ -95,27 +102,27 @@ func (s *Service) Run(ctx context.Context) error {
 			return nil
 
 		case event := <-s.watcher.Events:
-			fmt.Printf("Watcher event: %v on %s\n", event.Type, s.rel(event.Path))
+			s.log("Watcher event: %v on %s\n", event.Type, s.rel(event.Path))
 			if err := s.handleWatcherEvent(ctx, event); err != nil {
-				fmt.Printf("Error handling watcher event for %s: %v\n", s.rel(event.Path), err)
+				s.log("Error handling watcher event for %s: %v\n", s.rel(event.Path), err)
 			}
 
 		case <-ticker.C:
-			fmt.Println("Starting scheduled scan...")
+			s.log("Starting scheduled scan...\n")
 			stats, err := s.scanner.Scan(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
-				fmt.Printf("Scheduled scan failed: %v\n", err)
+				s.log("Scheduled scan failed: %v\n", err)
 			} else {
-				fmt.Printf("Scheduled scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
+				s.log("Scheduled scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
 					stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
 				_ = s.db.Checkpoint()
 			}
 
 			if deleted, err := s.scanner.Cleanup(ctx); err == nil && deleted > 0 {
-				fmt.Printf("Scheduled cleanup removed %d stale entries.\n", deleted)
+				s.log("Scheduled cleanup removed %d stale entries.\n", deleted)
 			}
 		}
 	}
@@ -134,13 +141,22 @@ func (s *Service) rel(path string) string {
 }
 
 func (s *Service) handleWatcherEvent(ctx context.Context, event watcher.Event) error {
+	if s.cfg.LimitPath != "" {
+		absLimit, _ := filepath.Abs(s.cfg.LimitPath)
+		if !filepath.IsAbs(s.cfg.LimitPath) {
+			absLimit = filepath.Join(s.cfg.RootPath, s.cfg.LimitPath)
+		}
+		if !strings.HasPrefix(event.Path, absLimit) {
+			return nil
+		}
+	}
 	relPath := s.rel(event.Path)
 	switch event.Type {
 	case watcher.EventCreate, watcher.EventModify:
 		info, err := os.Stat(event.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				fmt.Printf("Deleted: %s (via watcher)\n", relPath)
+				s.log("Deleted: %s (via watcher)\n", relPath)
 				return s.db.DeleteFile(relPath)
 			}
 			return err
@@ -160,9 +176,9 @@ func (s *Service) handleWatcherEvent(ctx context.Context, event watcher.Event) e
 			})
 			if err == nil {
 				if existing == nil {
-					fmt.Printf("Added: %s (dir)\n", relPath)
+					s.log("Added: %s (dir)\n", relPath)
 				} else {
-					fmt.Printf("Updated: %s (dir)\n", relPath)
+					s.log("Updated: %s (dir)\n", relPath)
 				}
 			}
 			return err
@@ -182,15 +198,15 @@ func (s *Service) handleWatcherEvent(ctx context.Context, event watcher.Event) e
 		})
 		if err == nil {
 			if existing == nil {
-				fmt.Printf("Added: %s\n", relPath)
+				s.log("Added: %s (%s)\n", relPath, hash)
 			} else {
-				fmt.Printf("Updated: %s\n", relPath)
+				s.log("Updated: %s (%s)\n", relPath, hash)
 			}
 		}
 		return err
 
 	case watcher.EventDelete:
-		fmt.Printf("Deleted: %s\n", relPath)
+		s.log("Deleted: %s\n", relPath)
 		return s.db.DeleteFile(relPath)
 	}
 	return nil

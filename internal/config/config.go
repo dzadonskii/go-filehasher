@@ -49,6 +49,7 @@ func ParseDuration(s string) (time.Duration, error) {
 
 type Config struct {
 	RootPath          string   `yaml:"root_path"`
+	LimitPath         string   `yaml:"limit_path"`
 	DBPath            string   `yaml:"db_path"`
 	ScanInterval      Duration `yaml:"scan_interval"`
 	BatchSize         int      `yaml:"batch_size"`
