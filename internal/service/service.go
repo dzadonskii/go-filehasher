@@ -80,7 +80,7 @@ func (s *Service) Run(ctx context.Context) error {
 		if deleted, err := s.scanner.Cleanup(ctx); err == nil && deleted > 0 {
 			s.log("Initial cleanup removed %d stale entries.\n", deleted)
 		}
-		_ = s.db.Checkpoint()
+		_ = s.db.Checkpoint(ctx)
 	}
 
 	// 2. Start watcher
@@ -100,11 +100,19 @@ func (s *Service) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		default:
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
 
 		case event := <-s.watcher.Events:
 			s.log("Watcher event: %v on %s\n", event.Type, s.rel(event.Path))
 			if err := s.handleWatcherEvent(ctx, event); err != nil {
-				s.log("Error handling watcher event for %s: %v\n", s.rel(event.Path), err)
+				if ctx.Err() == nil {
+					s.log("Error handling watcher event for %s: %v\n", s.rel(event.Path), err)
+				}
 			}
 
 		case <-ticker.C:
@@ -118,7 +126,7 @@ func (s *Service) Run(ctx context.Context) error {
 			} else {
 				s.log("Scheduled scan complete. Summary: Added: %d, Updated: %d, Deleted: %d, Unchanged: %d\n",
 					stats.Added, stats.Updated, stats.Deleted, stats.Unchanged)
-				_ = s.db.Checkpoint()
+				_ = s.db.Checkpoint(ctx)
 			}
 
 			if deleted, err := s.scanner.Cleanup(ctx); err == nil && deleted > 0 {
@@ -157,19 +165,19 @@ func (s *Service) handleWatcherEvent(ctx context.Context, event watcher.Event) e
 		if err != nil {
 			if os.IsNotExist(err) {
 				s.log("Deleted: %s (via watcher)\n", relPath)
-				return s.db.DeleteFile(relPath)
+				return s.db.DeleteFile(ctx, relPath)
 			}
 			return err
 		}
 
-		existing, err := s.db.GetFileInfo(relPath)
+		existing, err := s.db.GetFileInfo(ctx, relPath)
 		if err != nil {
 			return err
 		}
 
 		if info.IsDir() {
 			// Directory hashing is handled by scanner, but for watcher we just ensure it's in DB
-			err = s.db.UpsertFile(models.FileInfo{
+			err = s.db.UpsertFile(ctx, models.FileInfo{
 				Path:  relPath,
 				Mtime: info.ModTime(),
 				IsDir: true,
@@ -189,7 +197,7 @@ func (s *Service) handleWatcherEvent(ctx context.Context, event watcher.Event) e
 			return err
 		}
 
-		err = s.db.UpsertFile(models.FileInfo{
+		err = s.db.UpsertFile(ctx, models.FileInfo{
 			Path:  relPath,
 			Hash:  hash,
 			Size:  info.Size(),
@@ -207,7 +215,7 @@ func (s *Service) handleWatcherEvent(ctx context.Context, event watcher.Event) e
 
 	case watcher.EventDelete:
 		s.log("Deleted: %s\n", relPath)
-		return s.db.DeleteFile(relPath)
+		return s.db.DeleteFile(ctx, relPath)
 	}
 	return nil
 }
