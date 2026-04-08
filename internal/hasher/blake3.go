@@ -17,8 +17,9 @@ func HashFile(ctx context.Context, path string) (string, error) {
 	defer file.Close()
 
 	hasher := blake3.New()
+	cr := &contextReader{ctx: ctx, src: file}
 	cw := &contextWriter{ctx: ctx, dst: hasher}
-	if _, err := io.Copy(cw, file); err != nil {
+	if _, err := io.Copy(cw, cr); err != nil {
 		return "", err
 	}
 
@@ -36,5 +37,19 @@ func (c *contextWriter) Write(p []byte) (int, error) {
 		return 0, c.ctx.Err()
 	default:
 		return c.dst.Write(p)
+	}
+}
+
+type contextReader struct {
+	ctx context.Context
+	src io.Reader
+}
+
+func (c *contextReader) Read(p []byte) (int, error) {
+	select {
+	case <-c.ctx.Done():
+		return 0, c.ctx.Err()
+	default:
+		return c.src.Read(p)
 	}
 }

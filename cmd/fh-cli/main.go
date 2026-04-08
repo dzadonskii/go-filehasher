@@ -123,8 +123,11 @@ func cliLog(format string, a ...any) {
 }
 
 func listEntries(ctx context.Context, database *db.DB, root string) {
-	entries, err := database.GetAllPaths()
+	entries, err := database.GetAllPaths(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		log.Fatalf("Failed to get entries: %v", err)
 	}
 
@@ -212,8 +215,11 @@ func runCleanup(ctx context.Context, database *db.DB, root string, limit string,
 }
 
 func checkEntries(ctx context.Context, database *db.DB, root string, limit string) {
-	entries, err := database.GetAllPaths()
+	entries, err := database.GetAllPaths(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		log.Fatalf("Failed to get entries: %v", err)
 	}
 

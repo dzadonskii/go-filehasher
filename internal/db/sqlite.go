@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -48,21 +49,21 @@ func New(dbPath string) (*DB, error) {
 	return &DB{db: db}, nil
 }
 
-func (d *DB) Checkpoint() error {
-	_, err := d.db.Exec("PRAGMA wal_checkpoint(PASSIVE)")
+func (d *DB) Checkpoint(ctx context.Context) error {
+	_, err := d.db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)")
 	return err
 }
 
 func (d *DB) Close() error {
-	_ = d.Checkpoint()
+	_ = d.Checkpoint(context.Background())
 	return d.db.Close()
 }
 
-func (d *DB) UpsertFile(f models.FileInfo) error {
-	return d.UpsertFileTx(nil, f)
+func (d *DB) UpsertFile(ctx context.Context, f models.FileInfo) error {
+	return d.UpsertFileTx(ctx, nil, f)
 }
 
-func (d *DB) UpsertFileTx(tx *sql.Tx, f models.FileInfo) error {
+func (d *DB) UpsertFileTx(ctx context.Context, tx *sql.Tx, f models.FileInfo) error {
 	query := `
 		INSERT INTO entries (path, hash, size, mtime, updated_at, is_dir)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -76,20 +77,20 @@ func (d *DB) UpsertFileTx(tx *sql.Tx, f models.FileInfo) error {
 	now := time.Now()
 	var err error
 	if tx != nil {
-		_, err = tx.Exec(query, f.Path, f.Hash, f.Size, f.Mtime, now, f.IsDir)
+		_, err = tx.ExecContext(ctx, query, f.Path, f.Hash, f.Size, f.Mtime, now, f.IsDir)
 	} else {
-		_, err = d.db.Exec(query, f.Path, f.Hash, f.Size, f.Mtime, now, f.IsDir)
+		_, err = d.db.ExecContext(ctx, query, f.Path, f.Hash, f.Size, f.Mtime, now, f.IsDir)
 	}
 	return err
 }
 
-func (d *DB) Begin() (*sql.Tx, error) {
-	return d.db.Begin()
+func (d *DB) Begin(ctx context.Context) (*sql.Tx, error) {
+	return d.db.BeginTx(ctx, nil)
 }
 
-func (d *DB) GetFileInfo(path string) (*models.FileInfo, error) {
+func (d *DB) GetFileInfo(ctx context.Context, path string) (*models.FileInfo, error) {
 	var f models.FileInfo
-	err := d.db.QueryRow("SELECT path, hash, size, mtime, updated_at, is_dir FROM entries WHERE path = ?", path).
+	err := d.db.QueryRowContext(ctx, "SELECT path, hash, size, mtime, updated_at, is_dir FROM entries WHERE path = ?", path).
 		Scan(&f.Path, &f.Hash, &f.Size, &f.Mtime, &f.UpdatedAt, &f.IsDir)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -100,28 +101,33 @@ func (d *DB) GetFileInfo(path string) (*models.FileInfo, error) {
 	return &f, nil
 }
 
-func (d *DB) DeleteFile(path string) error {
-	return d.DeleteFileTx(nil, path)
+func (d *DB) DeleteFile(ctx context.Context, path string) error {
+	return d.DeleteFileTx(ctx, nil, path)
 }
 
-func (d *DB) DeleteFileTx(tx *sql.Tx, path string) error {
+func (d *DB) DeleteFileTx(ctx context.Context, tx *sql.Tx, path string) error {
 	var err error
 	if tx != nil {
-		_, err = tx.Exec("DELETE FROM entries WHERE path = ?", path)
+		_, err = tx.ExecContext(ctx, "DELETE FROM entries WHERE path = ?", path)
 	} else {
-		_, err = d.db.Exec("DELETE FROM entries WHERE path = ?", path)
+		_, err = d.db.ExecContext(ctx, "DELETE FROM entries WHERE path = ?", path)
 	}
 	return err
 }
 
-func (d *DB) IterateEntries(fn func(models.FileInfo) error) error {
-	rows, err := d.db.Query("SELECT path, hash, mtime, updated_at, size, is_dir FROM entries")
+func (d *DB) IterateEntries(ctx context.Context, fn func(models.FileInfo) error) error {
+	rows, err := d.db.QueryContext(ctx, "SELECT path, hash, mtime, updated_at, size, is_dir FROM entries")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		var f models.FileInfo
 		if err := rows.Scan(&f.Path, &f.Hash, &f.Mtime, &f.UpdatedAt, &f.Size, &f.IsDir); err != nil {
 			return err
@@ -133,8 +139,8 @@ func (d *DB) IterateEntries(fn func(models.FileInfo) error) error {
 	return rows.Err()
 }
 
-func (d *DB) GetAllPaths() (map[string]models.FileInfo, error) {
-	rows, err := d.db.Query("SELECT path, hash, mtime, updated_at, size, is_dir FROM entries")
+func (d *DB) GetAllPaths(ctx context.Context) (map[string]models.FileInfo, error) {
+	rows, err := d.db.QueryContext(ctx, "SELECT path, hash, mtime, updated_at, size, is_dir FROM entries")
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +148,11 @@ func (d *DB) GetAllPaths() (map[string]models.FileInfo, error) {
 
 	entries := make(map[string]models.FileInfo)
 	for rows.Next() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 		var f models.FileInfo
 		if err := rows.Scan(&f.Path, &f.Hash, &f.Mtime, &f.UpdatedAt, &f.Size, &f.IsDir); err != nil {
 			return nil, err
